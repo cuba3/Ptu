@@ -1,0 +1,106 @@
+name: Ptu
+options:
+  deploymentTarget:
+    macOS: "15.0"
+  developmentLanguage: en
+  knownRegions:
+    - en
+    - zh-Hans
+    - zh-Hant
+    - ja
+    - Base
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    SWIFT_STRICT_CONCURRENCY: minimal
+    SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated
+    MACOSX_DEPLOYMENT_TARGET: "15.0"
+    CODE_SIGN_IDENTITY: "-"
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGNING_REQUIRED: "NO"
+    ENABLE_HARDENED_RUNTIME: "NO"
+    DEVELOPMENT_LANGUAGE: en
+targets:
+  Ptu:
+    type: application
+    platform: macOS
+    sources:
+      - path: Ptu
+        excludes:
+          - Resources/Info.plist
+    resources:
+      - path: Ptu/Resources/Assets.xcassets
+      - path: Ptu/Resources/Localizable.xcstrings
+      - path: Ptu/Resources/AppIcon.icns
+    info:
+      path: Ptu/Resources/Info.plist
+      properties:
+        CFBundleDisplayName: Ptu
+        CFBundleIconFile: AppIcon
+        CFBundleIconName: AppIcon
+        LSApplicationCategoryType: public.app-category.graphics-design
+        NSHumanReadableCopyright: Copyright 2026 Ptu contributors
+        NSHighResolutionCapable: true
+        UTExportedTypeDeclarations:
+          - UTTypeIdentifier: app.ptu.document
+            UTTypeDescription: Ptu Document
+            UTTypeConformsTo:
+              - com.apple.package
+              - public.composite-content
+            UTTypeTagSpecification:
+              public.filename-extension:
+                - ptu
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Ptu Document
+            CFBundleTypeRole: Editor
+            LSHandlerRank: Owner
+            LSItemContentTypes:
+              - app.ptu.document
+          - CFBundleTypeName: PNG Image
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
+            LSItemContentTypes:
+              - public.png
+          - CFBundleTypeName: JPEG Image
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
+            LSItemContentTypes:
+              - public.jpeg
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.ptu.Ptu
+        PRODUCT_NAME: Ptu
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: Ptu/Resources/Info.plist
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        ENABLE_TESTABILITY: YES
+        COMBINE_HIDPI_IMAGES: YES
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        LOCALIZATION_PREFERS_STRING_CATALOGS: YES
+  PtuTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: PtuTests
+    dependencies:
+      - target: Ptu
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: app.ptu.PtuTests
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Ptu.app/Contents/MacOS/Ptu"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+schemes:
+  Ptu:
+    build:
+      targets:
+        Ptu: all
+        PtuTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - PtuTests
