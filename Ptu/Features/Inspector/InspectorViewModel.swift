@@ -44,8 +44,23 @@ final class InspectorViewModel {
         self.document = document
     }
 
+    @ObservationIgnored var onPickColor: ((Bool) -> Void)?
+
     func swapColors() {
         document.swapColors()
+    }
+
+    func resetColors() {
+        foreground = .black
+        background = .white
+    }
+
+    func pickColor(background: Bool) {
+        onPickColor?(background)
+    }
+
+    func applySwatch(_ color: RGBA) {
+        foreground = color.opaque
     }
 
     func setSelectedName(_ name: String) {
@@ -101,6 +116,78 @@ final class InspectorViewModel {
             document.beginCoalescedEdit()
         } else {
             document.endCoalescedEdit()
+        }
+    }
+
+    var selectedIsPixel: Bool {
+        guard let id = document.selectedLayerID else { return false }
+        return document.model.pixelLayer(id: id) != nil
+    }
+
+    var selectedIsAdjustment: Bool {
+        guard let id = document.selectedLayerID, let node = document.model.node(id: id) else { return false }
+        return node.isAdjustment
+    }
+
+    var hasMask: Bool { document.model.node(id: document.selectedLayerID ?? UUID())?.mask != nil }
+
+    var maskEnabled: Bool {
+        document.model.node(id: document.selectedLayerID ?? UUID())?.mask?.isEnabled ?? false
+    }
+
+    var editsMask: Bool {
+        get { document.editsMask }
+        set { document.editsMask = newValue }
+    }
+
+    var onEditAdjustment: (() -> Void)?
+
+    func isEffectEnabled(_ kind: LayerEffectKind) -> Bool {
+        guard let id = document.selectedLayerID, let layer = document.model.pixelLayer(id: id) else { return false }
+        return layer.effects.isEnabled(kind)
+    }
+
+    func toggleEffect(_ kind: LayerEffectKind) {
+        guard let id = document.selectedLayerID else { return }
+        document.edit(redraw: .full) { model in
+            guard var layer = model.pixelLayer(id: id) else { return }
+            var effects = layer.effects
+            if effects.contains(kind) {
+                effects.setEnabled(!effects.isEnabled(kind), for: kind)
+            } else {
+                effects.ensure(kind, color: self.document.background)
+            }
+            model.setEffects(id: id, effects: effects)
+        }
+    }
+
+    func addMask(revealing: Bool) {
+        guard let id = document.selectedLayerID else { return }
+        document.editsMask = false
+        document.edit(redraw: .full) { model in
+            model.addMask(id: id, revealing: revealing)
+        }
+    }
+
+    func deleteMask() {
+        guard let id = document.selectedLayerID else { return }
+        document.editsMask = false
+        document.edit(redraw: .full) { model in
+            model.deleteMask(id: id)
+        }
+    }
+
+    func invertMask() {
+        guard let id = document.selectedLayerID else { return }
+        document.edit(redraw: .full) { model in
+            model.invertMask(id: id)
+        }
+    }
+
+    func setMaskEnabled(_ enabled: Bool) {
+        guard let id = document.selectedLayerID else { return }
+        document.edit(redraw: .full) { model in
+            model.setMaskEnabled(id: id, isEnabled: enabled)
         }
     }
 }

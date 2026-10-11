@@ -56,7 +56,8 @@ enum ProjectStore {
             resolutionPPI: min(max(manifest.resolutionPPI, 1), 2400),
             layers: layers,
             nextLayerNumber: max(manifest.nextLayerNumber, 1),
-            nextGroupNumber: max(manifest.nextGroupNumber, 1)
+            nextGroupNumber: max(manifest.nextGroupNumber, 1),
+            guides: (manifest.guides ?? []).compactMap(CanvasGuide.init)
         )
     }
 
@@ -68,7 +69,8 @@ enum ProjectStore {
             resolutionPPI: model.resolutionPPI,
             nextLayerNumber: model.nextLayerNumber,
             nextGroupNumber: model.nextGroupNumber,
-            layers: model.layers.map(ManifestLayer.init)
+            layers: model.layers.map(ManifestLayer.init),
+            guides: model.guides.map(ManifestGuide.init)
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -79,9 +81,20 @@ enum ProjectStore {
         nodes.flatMap { node -> [(String, PixelBuffer)] in
             switch node {
             case .pixels(let layer):
-                [("\(layer.id.uuidString).png", layer.buffer)]
+                var images = [("\(layer.id.uuidString).png", layer.buffer)]
+                if let mask = layer.mask {
+                    images.append(("\(layer.id.uuidString)-mask.png", mask.buffer))
+                }
+                return images
             case .group(let group):
-                pixelImages(in: group.children)
+                var images = pixelImages(in: group.children)
+                if let mask = group.mask {
+                    images.append(("\(group.id.uuidString)-mask.png", mask.buffer))
+                }
+                return images
+            case .adjustment(let layer):
+                guard let mask = layer.mask else { return [] }
+                return [("\(layer.id.uuidString)-mask.png", mask.buffer)]
             }
         }
     }
@@ -105,7 +118,10 @@ enum ProjectStore {
                 blend: blend,
                 originX: record.originX ?? 0,
                 originY: record.originY ?? 0,
-                buffer: decoded.buffer
+                buffer: decoded.buffer,
+                mask: try readMask(record, files: files),
+                maskSourceID: record.maskSourceID,
+                effects: record.effects ?? LayerEffects()
             ))
         case "group":
             let children = try (record.children ?? []).map { try readLayer($0, files: files) }
@@ -115,11 +131,31 @@ enum ProjectStore {
                 isVisible: record.visible,
                 opacity: opacity,
                 blend: blend,
-                children: children
+                children: children,
+                mask: try readMask(record, files: files)
+            ))
+        case "adjustment":
+            guard let adjustment = record.adjustment else { throw DocumentError.unreadable }
+            return .adjustment(AdjustmentLayer(
+                id: record.id,
+                name: record.name,
+                isVisible: record.visible,
+                opacity: opacity,
+                blend: blend,
+                adjustment: adjustment,
+                mask: try readMask(record, files: files),
+                maskSourceID: record.maskSourceID
             ))
         default:
             throw DocumentError.unreadable
         }
+    }
+
+    private static func readMask(_ record: ManifestLayer, files: [String: FileWrapper]) throws -> LayerMask? {
+        guard let name = record.mask else { return nil }
+        guard let data = files[name]?.regularFileContents else { throw DocumentError.unreadable }
+        let decoded = try ImageFiles.decode(data)
+        return LayerMask(buffer: decoded.buffer, isEnabled: record.maskEnabled ?? true)
     }
 }
 
@@ -131,6 +167,26 @@ private struct Manifest: Codable {
     var nextLayerNumber: Int
     var nextGroupNumber: Int
     var layers: [ManifestLayer]
+    var guides: [ManifestGuide]?
+}
+
+private struct ManifestGuide: Codable {
+    var id: UUID
+    var axis: String
+    var position: Double
+
+    init(_ guide: CanvasGuide) {
+        id = guide.id
+        axis = guide.axis.rawValue
+        position = guide.position
+    }
+}
+
+extension CanvasGuide {
+    fileprivate init?(_ record: ManifestGuide) {
+        guard let axis = Axis(rawValue: record.axis) else { return nil }
+        self.init(id: record.id, axis: axis, position: record.position)
+    }
 }
 
 private struct ManifestLayer: Codable {
@@ -144,6 +200,11 @@ private struct ManifestLayer: Codable {
     var originY: Int?
     var image: String?
     var children: [ManifestLayer]?
+    var mask: String?
+    var maskEnabled: Bool?
+    var maskSourceID: UUID?
+    var effects: LayerEffects?
+    var adjustment: LayerAdjustment?
 
     init(_ node: LayerNode) {
         switch node {
@@ -158,6 +219,11 @@ private struct ManifestLayer: Codable {
             originY = layer.originY
             image = "\(layer.id.uuidString).png"
             children = nil
+            mask = layer.mask == nil ? nil : "\(layer.id.uuidString)-mask.png"
+            maskEnabled = layer.mask?.isEnabled
+            maskSourceID = layer.maskSourceID
+            effects = layer.effects.isEmpty ? nil : layer.effects
+            adjustment = nil
         case .group(let group):
             kind = "group"
             id = group.id
@@ -169,6 +235,27 @@ private struct ManifestLayer: Codable {
             originY = nil
             image = nil
             children = group.children.map(ManifestLayer.init)
+            mask = group.mask == nil ? nil : "\(group.id.uuidString)-mask.png"
+            maskEnabled = group.mask?.isEnabled
+            maskSourceID = nil
+            effects = nil
+            adjustment = nil
+        case .adjustment(let layer):
+            kind = "adjustment"
+            id = layer.id
+            name = layer.name
+            visible = layer.isVisible
+            opacity = layer.opacity
+            blend = layer.blend.rawValue
+            originX = nil
+            originY = nil
+            image = nil
+            children = nil
+            mask = layer.mask == nil ? nil : "\(layer.id.uuidString)-mask.png"
+            maskEnabled = layer.mask?.isEnabled
+            maskSourceID = layer.maskSourceID
+            effects = nil
+            adjustment = layer.adjustment
         }
     }
 }

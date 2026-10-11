@@ -36,10 +36,9 @@ struct PtuApp: App {
 
     var body: some Scene {
         DocumentGroup(newDocument: PtuDocument()) { configuration in
-            EditorView(document: configuration.$document)
+            EditorView(document: configuration.$document, fileURL: configuration.fileURL)
         }
         .commands { PtuCommands() }
-        .defaultLaunchBehavior(.presented)
         .defaultSize(width: 1200, height: 760)
 
         Settings {

@@ -31,7 +31,7 @@ enum Compositor {
         } else {
             context.clear(canvas)
         }
-        draw(layers: model.layers, into: context, canvasWidth: model.width, canvasHeight: model.height, cache: cache)
+        draw(model.layers, of: model, into: context, canvasWidth: model.width, canvasHeight: model.height, cache: cache)
         context.restoreGState()
     }
 
@@ -59,19 +59,21 @@ enum Compositor {
     }
 
     private static func draw(
-        layers: [LayerNode],
+        _ layers: [LayerNode],
+        of model: DocumentModel,
         into context: CGContext,
         canvasWidth: Int,
         canvasHeight: Int,
         cache: LayerImageCache?
     ) {
         for layer in layers.reversed() {
-            draw(layer, into: context, canvasWidth: canvasWidth, canvasHeight: canvasHeight, cache: cache)
+            draw(layer, of: model, into: context, canvasWidth: canvasWidth, canvasHeight: canvasHeight, cache: cache)
         }
     }
 
     private static func draw(
         _ node: LayerNode,
+        of model: DocumentModel,
         into context: CGContext,
         canvasWidth: Int,
         canvasHeight: Int,
@@ -80,12 +82,13 @@ enum Compositor {
         guard node.isVisible, node.opacity > 0 else { return }
         switch node {
         case .pixels(let layer):
-            guard let image = cache?.image(for: layer) ?? layer.buffer.cgImage() else { return }
+            let presented = presentedPixels(layer, model: model, cache: cache)
+            guard let image = presented.image else { return }
             let destination = CGRect(
-                x: CGFloat(layer.originX),
-                y: CGFloat(canvasHeight - layer.originY - layer.buffer.height),
-                width: CGFloat(layer.buffer.width),
-                height: CGFloat(layer.buffer.height)
+                x: CGFloat(presented.originX),
+                y: CGFloat(canvasHeight - presented.originY - presented.buffer.height),
+                width: CGFloat(presented.buffer.width),
+                height: CGFloat(presented.buffer.height)
             )
             context.saveGState()
             context.setAlpha(CGFloat(layer.opacity))
@@ -94,25 +97,88 @@ enum Compositor {
             context.draw(image, in: destination)
             context.restoreGState()
         case .group(let group):
-            guard let image = renderGroup(group, canvasWidth: canvasWidth, canvasHeight: canvasHeight, cache: cache) else { return }
+            guard let image = renderGroup(group, model: model, canvasWidth: canvasWidth, canvasHeight: canvasHeight, cache: cache) else { return }
             context.saveGState()
             context.setAlpha(CGFloat(group.opacity))
             context.setBlendMode(group.blend.cgBlendMode)
             context.interpolationQuality = .none
             context.draw(image, in: CGRect(x: 0, y: 0, width: canvasWidth, height: canvasHeight))
             context.restoreGState()
+        case .adjustment(let layer):
+            drawAdjustment(layer, of: model, into: context, canvasWidth: canvasWidth, canvasHeight: canvasHeight)
         }
+    }
+
+    private static func presentedPixels(_ layer: PixelLayer, model: DocumentModel, cache: LayerImageCache?) -> (image: CGImage?, buffer: PixelBuffer, originX: Int, originY: Int) {
+        let needsPresentation = layer.mask != nil || layer.maskSourceID != nil || !layer.effects.visible.isEmpty
+        guard needsPresentation else {
+            return (cache?.image(for: layer) ?? layer.buffer.cgImage(), layer.buffer, layer.originX, layer.originY)
+        }
+        let presented = LayerPresentation.present(layer, in: model)
+        return (presented.buffer.cgImage(), presented.buffer, presented.originX, presented.originY)
+    }
+
+    private static func drawAdjustment(
+        _ layer: AdjustmentLayer,
+        of model: DocumentModel,
+        into context: CGContext,
+        canvasWidth: Int,
+        canvasHeight: Int
+    ) {
+        guard let snapshot = context.makeImage(), let below = PixelBuffer.from(cgImage: snapshot) else { return }
+        let adjusted = layer.adjustment.apply(below)
+        var blended = blend(adjusted, over: below, mode: layer.blend, opacity: layer.opacity)
+        if let mask = layer.mask {
+            blended = LayerPresentation.mix(base: below, top: blended) { x, y in
+                mask.coverage(x: x, y: y)
+            }
+        }
+        if let sourceID = layer.maskSourceID {
+            blended = LayerPresentation.mix(base: below, top: blended) { x, y in
+                LayerPresentation.liveCoverage(model, sourceID: sourceID, x: x, y: y)
+            }
+        }
+        guard let image = blended.cgImage() else { return }
+        context.saveGState()
+        context.setBlendMode(.copy)
+        context.interpolationQuality = .none
+        context.draw(image, in: CGRect(x: 0, y: 0, width: canvasWidth, height: canvasHeight))
+        context.restoreGState()
+    }
+
+    private static func blend(_ top: PixelBuffer, over base: PixelBuffer, mode: BlendMode, opacity: Double) -> PixelBuffer {
+        let opacity = min(max(opacity, 0), 1)
+        if opacity <= 0 { return base }
+        if mode == .normal {
+            if opacity >= 1 { return top }
+            return LayerPresentation.mix(base: base, top: top) { _, _ in PixelMath.byte(opacity) }
+        }
+        guard let context = makeContext(width: base.width, height: base.height),
+              let baseImage = base.cgImage(),
+              let topImage = top.cgImage() else { return top }
+        let rect = CGRect(x: 0, y: 0, width: base.width, height: base.height)
+        context.draw(baseImage, in: rect)
+        context.setAlpha(CGFloat(opacity))
+        context.setBlendMode(mode.cgBlendMode)
+        context.draw(topImage, in: rect)
+        guard let image = context.makeImage(), let blended = PixelBuffer.from(cgImage: image) else { return top }
+        return blended
     }
 
     private static func renderGroup(
         _ group: GroupLayer,
+        model: DocumentModel,
         canvasWidth: Int,
         canvasHeight: Int,
         cache: LayerImageCache?
     ) -> CGImage? {
         guard let context = makeContext(width: canvasWidth, height: canvasHeight) else { return nil }
         context.clear(CGRect(x: 0, y: 0, width: canvasWidth, height: canvasHeight))
-        draw(layers: group.children, into: context, canvasWidth: canvasWidth, canvasHeight: canvasHeight, cache: cache)
-        return context.makeImage()
+        draw(group.children, of: model, into: context, canvasWidth: canvasWidth, canvasHeight: canvasHeight, cache: cache)
+        guard var image = context.makeImage() else { return nil }
+        if let mask = group.mask, let masked = PixelBuffer.from(cgImage: image) {
+            image = mask.applying(to: masked).cgImage() ?? image
+        }
+        return image
     }
 }

@@ -75,7 +75,7 @@
 			<key>UTTypeConformsTo</key>
 			<array>
 				<string>com.apple.package</string>
-				<string>public.composite-content</string>
+				<string>public.data</string>
 			</array>
 			<key>UTTypeDescription</key>
 			<string>Ptu Document</string>
@@ -86,6 +86,45 @@
 				<key>public.filename-extension</key>
 				<array>
 					<string>ptu</string>
+				</array>
+			</dict>
+		</dict>
+	</array>
+	<key>UTImportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.image</string>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>Adobe Photoshop Document</string>
+			<key>UTTypeIdentifier</key>
+			<string>com.adobe.photoshop-image</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>psd</string>
+				</array>
+			</dict>
+		</dict>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.image</string>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>Adobe Photoshop Large Document</string>
+			<key>UTTypeIdentifier</key>
+			<string>com.adobe.photoshop-large-image</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>psb</string>
 				</array>
 			</dict>
 		</dict>

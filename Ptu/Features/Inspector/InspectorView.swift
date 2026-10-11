@@ -15,6 +15,17 @@ struct InspectorView: View {
             documentSection
             if model.hasSelectedLayer {
                 layerSection
+                if model.selectedIsPixel || model.selectedIsAdjustment {
+                    MaskSection(model: model)
+                }
+                if model.selectedIsPixel {
+                    EffectsSection(model: model)
+                }
+                if model.selectedIsAdjustment {
+                    Button(L10n.Adjust.edit) {
+                        model.onEditAdjustment?()
+                    }
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -28,18 +39,38 @@ struct InspectorView: View {
         VStack(alignment: .leading, spacing: Theme.compactSpacing) {
             Text(L10n.Color.section)
                 .font(.headline)
-            ColorPicker(selection: foregroundBinding, supportsOpacity: false) {
-                Text(L10n.Color.foreground)
+            colorWell(title: L10n.Color.foreground, color: model.foreground) {
+                model.pickColor(background: false)
             }
-            ColorPicker(selection: backgroundBinding, supportsOpacity: false) {
-                Text(L10n.Color.background)
+            colorWell(title: L10n.Color.background, color: model.background) {
+                model.pickColor(background: true)
             }
-            Button {
-                model.swapColors()
-            } label: {
-                Label(L10n.Color.swap, systemImage: "arrow.left.arrow.right")
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 18), spacing: 6)], alignment: .leading, spacing: 6) {
+                ForEach(Array(ColorPalette.swatches.enumerated()), id: \.offset) { _, swatch in
+                    Button {
+                        model.applySwatch(swatch)
+                    } label: {
+                        RoundedRectangle(cornerRadius: 3)
+                            .fill(Color(nsColor: swatch.nsColor))
+                            .frame(width: 18, height: 18)
+                            .overlay { RoundedRectangle(cornerRadius: 3).strokeBorder(.black.opacity(0.35)) }
+                    }
+                    .buttonStyle(.plain)
+                    .help(swatch.hex)
+                }
             }
-            .buttonStyle(.borderless)
+            HStack {
+                Button {
+                    model.swapColors()
+                } label: {
+                    Label(L10n.Color.swap, systemImage: "arrow.left.arrow.right")
+                }
+                .buttonStyle(.borderless)
+                Button(L10n.Color.reset) {
+                    model.resetColors()
+                }
+                .buttonStyle(.borderless)
+            }
         }
     }
 
@@ -58,7 +89,9 @@ struct InspectorView: View {
             TextField(L10n.Layer.name, text: $nameDraft)
                 .focused($nameFocused)
                 .onSubmit { model.setSelectedName(nameDraft) }
+                .onDisappear { TextInsertionFocus.set("layer-name", active: false) }
                 .onChange(of: nameFocused) { _, focused in
+                    TextInsertionFocus.set("layer-name", active: focused)
                     model.nameFocusChanged(isFocused: focused, draft: nameDraft)
                 }
                 .onChange(of: nameDraft) { _, newValue in
@@ -82,18 +115,18 @@ struct InspectorView: View {
         }
     }
 
-    private var foregroundBinding: Binding<Color> {
-        Binding(
-            get: { Color(nsColor: model.foreground.nsColor) },
-            set: { model.foreground = RGBA(nsColor: NSColor($0)).opaque }
-        )
-    }
-
-    private var backgroundBinding: Binding<Color> {
-        Binding(
-            get: { Color(nsColor: model.background.nsColor) },
-            set: { model.background = RGBA(nsColor: NSColor($0)).opaque }
-        )
+    private func colorWell(title: String, color: RGBA, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack {
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(Color(nsColor: color.nsColor))
+                    .frame(width: 28, height: 28)
+                    .overlay { RoundedRectangle(cornerRadius: 4).strokeBorder(.black.opacity(0.35)) }
+                Text(title)
+                Spacer()
+            }
+        }
+        .buttonStyle(.plain)
     }
 
     private var blendBinding: Binding<BlendMode> {

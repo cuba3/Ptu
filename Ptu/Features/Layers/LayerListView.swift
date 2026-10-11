@@ -96,7 +96,9 @@ private struct LayerRow: View {
     var body: some View {
         switch node {
         case .pixels(let layer):
-            label(id: layer.id, name: layer.name, isVisible: layer.isVisible, symbol: "photo")
+            label(id: layer.id, name: layer.name, isVisible: layer.isVisible, symbol: layer.mask == nil ? "photo" : "photo.on.rectangle")
+        case .adjustment(let layer):
+            label(id: layer.id, name: layer.name, isVisible: layer.isVisible, symbol: "circle.lefthalf.filled")
         case .group(let group):
             DisclosureGroup {
                 ForEach(group.children) { child in

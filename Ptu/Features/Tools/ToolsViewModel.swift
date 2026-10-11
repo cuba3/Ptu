@@ -8,10 +8,19 @@ import Observation
 @MainActor
 @Observable
 final class ToolsViewModel {
-    private let document: EditorDocumentSession
+    let document: EditorDocumentSession
 
     var tool: EditorTool = .move {
         didSet {
+            guard tool != oldValue else { return }
+            if tool == .type {
+                focusTypeEditor()
+            } else {
+                typeSession = false
+                typeFieldFocused = false
+                TextInsertionFocus.set("type-field", active: false)
+            }
+            endPreviousTool(oldValue)
             if tool == .crop {
                 if cropRect == nil {
                     cropRect = canvasBounds
@@ -20,13 +29,81 @@ final class ToolsViewModel {
                 cropRect = nil
                 cropDrag = nil
             }
+            overlayRevision &+= 1
         }
     }
     var brushSize: Double = 24
     var brushHardness: Double = 0.8
     var brushOpacity: Double = 1
-    var selection: CGRect?
+    var selection: PixelSelection? {
+        didSet { overlayRevision &+= 1 }
+    }
+    var selectionDraft: PixelSelection?
+    var overlayRevision = 0
+    var marqueeShape: MarqueeShape = .rectangle
+    var lassoKind: LassoKind = .freehand
+    var lassoDraft: [CGPoint] = []
+    var lassoCursor: CGPoint?
+    var wandTolerance: Double = 32
+    var wandContiguous = true
+    var sampleAllLayers = false
+    var colorFuzziness: Double = 40 {
+        didSet { refreshColorRange() }
+    }
+    var colorInclude: [RGBA] = []
+    var colorExclude: [RGBA] = []
+    var featherAmount: Double = 8
+    var objectEdgeOffset: Double = 0
+    var cloneSourcePoint: CGPoint?
+    var cloneAligned = true
+    var storedCloneOffset: CGSize?
+    var blurRadius: Double = 8
+    var smudgeMode: SmudgeMode = .smudge
+    var healMode = 0
+    var shapeKind: ShapeKind = .rectangle
+    var shapeCornerRadius: Double = 0
+    var shapeLineWidth: Double = 4
+    var gradientKind: GradientKind = .linear
+    var gradientFade: GradientFade = .toTransparent
+    var gradientReversed = false
+    var typeText = "" {
+        didSet { overlayRevision &+= 1 }
+    }
+    var typeFontSize: Double = 48
+    var typeOrigin: CGPoint?
+    /// Keyboard focus is in the sidebar type field.
+    var typeFieldFocused = false
+    /// Type tool is accepting text, until Escape or another tool. Shortcuts stay off for the whole session.
+    var typeSession = false
+    /// Bumped so the type field becomes first responder again after the canvas was clicked.
+    var typeFocusNonce = 0
+    var shapeDraft: ShapeDraft?
+    var gradientStart: CGPoint?
+    var gradientEnd: CGPoint?
+    var floating: FloatingPixels?
+    var copiedPixels: CopiedPixels?
+    var healDabs: [CGPoint] = []
+    var toolMessage: String?
+    var hoverPoint: CGPoint?
     var cropRect: CGRect?
+
+    var hasSelection: Bool { selection?.isEmpty == false }
+    var canPaste: Bool { copiedPixels != nil }
+    /// An active type session or the sidebar type field is accepting characters.
+    var isEditingText: Bool { typeSession || typeFieldFocused }
+
+    @ObservationIgnored var selectionAtGesture: PixelSelection?
+    @ObservationIgnored var marqueeMode: SelectionMode = .replace
+    @ObservationIgnored var movingSelection = false
+    @ObservationIgnored var selectionMoveOrigin: PixelSelection?
+    @ObservationIgnored var selectionMoveAnchor: CGPoint?
+    @ObservationIgnored var floatLast: CGPoint?
+    @ObservationIgnored var floatRemainder = CGPoint.zero
+    @ObservationIgnored var smudgeCarried: [Float] = []
+    @ObservationIgnored var blurredSample: PixelBuffer?
+    @ObservationIgnored var cloneSnapshot: PixelBuffer?
+    @ObservationIgnored var cloneSnapshotOrigin = CGPoint.zero
+    @ObservationIgnored var cloneStrokeOffset: CGSize?
 
     /// Canvas zoom used to size crop-handle hit targets.
     @ObservationIgnored var interactionZoom: CGFloat = 1
@@ -34,7 +111,7 @@ final class ToolsViewModel {
     @ObservationIgnored private var moveRemainder = CGPoint.zero
     @ObservationIgnored private var marqueeAnchor: CGPoint?
     @ObservationIgnored private var cropDrag: CropDrag?
-    @ObservationIgnored private var lastBrushPoint: CGPoint?
+    @ObservationIgnored var lastBrushPoint: CGPoint?
 
     var showsCropActions: Bool {
         guard tool == .crop, let cropRect else { return false }
@@ -47,16 +124,35 @@ final class ToolsViewModel {
 
     func resetForNewCanvas() {
         selection = nil
+        selectionDraft = nil
+        lassoDraft = []
+        lassoCursor = nil
+        floating = nil
+        shapeDraft = nil
+        gradientStart = nil
+        gradientEnd = nil
+        typeOrigin = nil
+        typeFieldFocused = false
+        typeSession = false
+        TextInsertionFocus.set("type-field", active: false)
+        healDabs = []
+        toolMessage = nil
         cropRect = nil
         cropDrag = nil
     }
 
     func deleteSelection() {
-        guard let selection, let id = document.selectedLayerID else { return }
-        let area = selection.standardized
-        guard area.width >= 1, area.height >= 1 else { return }
-        document.edit(redraw: .rect(area.insetBy(dx: -1, dy: -1))) { model in
-            model.clear(selection: area, layerID: id)
+        guard let selection, !selection.isEmpty, let id = document.selectedLayerID else { return }
+        if let area = selection.rectangularArea {
+            document.edit(redraw: .rect(area.insetBy(dx: -1, dy: -1))) { model in
+                model.clear(selection: area, layerID: id)
+            }
+            return
+        }
+        let coverage = selection.resolvedCoverage()
+        let slop = selection.feather * 2 + 1
+        document.edit(redraw: .rect(selection.bounds.insetBy(dx: -slop, dy: -slop))) { model in
+            model.erase(layerID: id, coverage: coverage)
         }
     }
 
@@ -78,61 +174,148 @@ final class ToolsViewModel {
         cropRect = canvasBounds
     }
 
-    func mouseDown(at point: CGPoint) {
+    func mouseDown(at point: CGPoint, shift: Bool = false, option: Bool = false, clickCount: Int = 1) {
+        hoverPoint = point
         switch tool {
         case .move:
-            document.beginCoalescedEdit()
-            moveLast = point
-            moveRemainder = .zero
+            if floating != nil {
+                beginFloatingDrag(at: point)
+            } else {
+                document.beginCoalescedEdit()
+                moveLast = point
+                moveRemainder = .zero
+            }
         case .marquee:
-            marqueeAnchor = point
-            selection = CGRect(origin: point, size: .zero)
+            beginMarquee(at: point, shift: shift, option: option)
+        case .lasso:
+            beginLasso(at: point, shift: shift, option: option, clickCount: clickCount)
+        case .wand:
+            applyWand(at: point, shift: shift, option: option)
+        case .objectSelection:
+            applyObjectSelection(at: point, shift: shift, option: option)
+        case .colorRange:
+            sampleColorRange(at: point, shift: shift, option: option)
         case .brush:
             guard let id = document.selectedLayerID, document.model.pixelLayer(id: id) != nil else { return }
             document.beginCoalescedEdit()
             lastBrushPoint = point
             paint([point])
+        case .clone:
+            beginClone(at: point, option: option)
+        case .heal:
+            beginHeal(at: point)
+        case .blur:
+            beginBlur(at: point)
+        case .smudge:
+            beginSmudge(at: point)
         case .crop:
             beginCrop(at: point)
         case .eyedropper:
             sampleColor(at: point)
+        case .type:
+            beginType(at: point)
+        case .shape:
+            beginShape(at: point, shift: shift, option: option)
+        case .gradient:
+            beginGradient(at: point)
+        case .hand, .zoom:
+            break
         }
     }
 
-    func mouseDragged(to point: CGPoint) {
+    func mouseDragged(to point: CGPoint, shift: Bool = false, option: Bool = false) {
+        hoverPoint = point
         switch tool {
         case .move:
-            dragMove(to: point)
+            if floating != nil {
+                dragFloating(to: point)
+            } else {
+                dragMove(to: point)
+            }
         case .marquee:
-            updateMarquee(to: point)
+            updateMarquee(to: point, shift: shift)
+        case .lasso:
+            dragLasso(to: point)
+        case .wand, .objectSelection, .colorRange:
+            break
         case .brush:
             dragBrush(to: point)
+        case .clone:
+            dragClone(to: point)
+        case .heal:
+            dragHeal(to: point)
+        case .blur:
+            dragBlur(to: point)
+        case .smudge:
+            dragSmudge(to: point)
         case .crop:
             continueCrop(to: point)
         case .eyedropper:
             sampleColor(at: point)
+        case .type:
+            break
+        case .shape:
+            dragShape(to: point, shift: shift, option: option)
+        case .gradient:
+            dragGradient(to: point)
+        case .hand, .zoom:
+            break
         }
     }
 
-    func mouseUp(at point: CGPoint) {
+    func mouseUp(at point: CGPoint, shift: Bool = false, option: Bool = false) {
+        hoverPoint = point
         switch tool {
         case .move:
-            dragMove(to: point)
-            document.endCoalescedEdit()
-            moveLast = nil
+            if floating != nil {
+                dragFloating(to: point)
+                endFloatingDrag()
+            } else {
+                dragMove(to: point)
+                document.endCoalescedEdit()
+                moveLast = nil
+            }
         case .marquee:
-            updateMarquee(to: point)
-            marqueeAnchor = nil
+            updateMarquee(to: point, shift: shift)
+            finishMarquee()
+        case .lasso:
+            finishLasso(at: point, clickCount: 1)
+        case .wand, .objectSelection, .colorRange:
+            break
         case .brush:
             dragBrush(to: point)
             document.commitPainting()
             document.endCoalescedEdit()
             lastBrushPoint = nil
+        case .clone:
+            finishClone(at: point)
+        case .heal:
+            finishHeal(at: point)
+        case .blur:
+            finishBlur(at: point)
+        case .smudge:
+            finishSmudge(at: point)
         case .crop:
             continueCrop(to: point)
             finishCropDrag()
         case .eyedropper:
             sampleColor(at: point)
+        case .type:
+            break
+        case .shape:
+            finishShape()
+        case .gradient:
+            finishGradient()
+        case .hand, .zoom:
+            break
+        }
+    }
+
+    func hover(at point: CGPoint) {
+        hoverPoint = point
+        if tool == .lasso, lassoKind == .polygonal, !lassoDraft.isEmpty {
+            lassoCursor = point
+            overlayRevision &+= 1
         }
     }
 
@@ -156,14 +339,73 @@ final class ToolsViewModel {
         moveLast = point
     }
 
-    private func updateMarquee(to point: CGPoint) {
+    private func beginMarquee(at point: CGPoint, shift: Bool, option: Bool) {
+        marqueeMode = option ? .subtract : (shift ? .add : .replace)
+        if marqueeMode == .replace, let selection, selection.contains(point) {
+            movingSelection = true
+            selectionMoveOrigin = selection
+            selectionMoveAnchor = point
+            marqueeAnchor = nil
+            return
+        }
+        movingSelection = false
+        marqueeAnchor = point
+        selectionAtGesture = marqueeMode == .replace ? nil : selection
+        if marqueeMode == .replace {
+            selection = nil
+        }
+    }
+
+    private func updateMarquee(to point: CGPoint, shift: Bool) {
+        if movingSelection, let origin = selectionMoveOrigin, let anchor = selectionMoveAnchor {
+            let dx = Int((point.x - anchor.x).rounded())
+            let dy = Int((point.y - anchor.y).rounded())
+            selection = origin.offset(dx: dx, dy: dy)
+            return
+        }
         guard let anchor = marqueeAnchor else { return }
-        selection = CGRect(
-            x: min(anchor.x, point.x),
-            y: min(anchor.y, point.y),
-            width: abs(point.x - anchor.x),
-            height: abs(point.y - anchor.y)
+        var dx = point.x - anchor.x
+        var dy = point.y - anchor.y
+        if shift {
+            let side = max(abs(dx), abs(dy))
+            dx = dx < 0 ? -side : side
+            dy = dy < 0 ? -side : side
+        }
+        let rect = CGRect(
+            x: min(anchor.x, anchor.x + dx),
+            y: min(anchor.y, anchor.y + dy),
+            width: abs(dx),
+            height: abs(dy)
         )
+        let draft = marqueeShape == .ellipse
+            ? PixelSelection.ellipse(rect, width: document.model.width, height: document.model.height)
+            : PixelSelection.rectangle(rect, width: document.model.width, height: document.model.height)
+        if marqueeMode == .replace {
+            selection = draft
+        } else {
+            selectionDraft = draft
+            overlayRevision &+= 1
+        }
+    }
+
+    private func finishMarquee() {
+        if movingSelection {
+            movingSelection = false
+            selectionMoveOrigin = nil
+            selectionMoveAnchor = nil
+            marqueeAnchor = nil
+            return
+        }
+        if marqueeMode != .replace, let draft = selectionDraft {
+            if let base = selectionAtGesture {
+                selection = base.combining(draft, mode: marqueeMode)
+            } else if marqueeMode == .add {
+                selection = draft
+            }
+        }
+        selectionDraft = nil
+        marqueeAnchor = nil
+        selectionAtGesture = nil
     }
 
     private func beginCrop(at point: CGPoint) {
@@ -274,22 +516,36 @@ final class ToolsViewModel {
         let opacity = brushOpacity
         let color = document.foreground.opaque
         var dirty = CGRect.null
+        let margin = CGFloat(document.model.pixelLayer(id: id)?.effects.margin ?? 0)
         document.withPaintingModel { live in
             for point in points {
-                if let rect = live.stamp(
-                    layerID: id,
-                    documentCenter: point,
-                    radius: radius,
-                    hardness: hardness,
-                    opacity: opacity,
-                    color: color
-                ) {
+                let rect: CGRect?
+                if document.editsMask {
+                    rect = live.stampMask(
+                        layerID: id,
+                        documentCenter: point,
+                        radius: radius,
+                        hardness: hardness,
+                        opacity: opacity,
+                        color: color
+                    )
+                } else {
+                    rect = live.stamp(
+                        layerID: id,
+                        documentCenter: point,
+                        radius: radius,
+                        hardness: hardness,
+                        opacity: opacity,
+                        color: color
+                    )
+                }
+                if let rect {
                     dirty = dirty.union(rect)
                 }
             }
         }
         guard !dirty.isNull, !dirty.isEmpty else { return }
-        document.notePaintDirty(dirty.insetBy(dx: -2, dy: -2))
+        document.notePaintDirty(dirty.insetBy(dx: -(margin + 2), dy: -(margin + 2)))
     }
 
     private func sampleColor(at point: CGPoint) {

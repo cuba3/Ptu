@@ -70,6 +70,37 @@ struct PixelBuffer: Equatable, @unchecked Sendable {
             && lhs.storage.bytes == rhs.storage.bytes
     }
 
+    func copyBytes() -> [UInt8] {
+        storage.bytes
+    }
+
+    mutating func setBytes(_ bytes: [UInt8]) {
+        guard bytes.count == width * height * 4 else { return }
+        makeUnique()
+        storage.bytes = bytes
+    }
+
+    /// Visits every pixel in row-major order, top-left origin. `body` may replace the pixel.
+    mutating func updateEach(_ body: (_ x: Int, _ y: Int, _ pixel: inout RGBA) -> Void) {
+        makeUnique()
+        for y in 0..<height {
+            for x in 0..<width {
+                let index = (y * width + x) * 4
+                var pixel = RGBA(
+                    r: storage.bytes[index],
+                    g: storage.bytes[index + 1],
+                    b: storage.bytes[index + 2],
+                    a: storage.bytes[index + 3]
+                )
+                body(x, y, &pixel)
+                storage.bytes[index] = pixel.r
+                storage.bytes[index + 1] = pixel.g
+                storage.bytes[index + 2] = pixel.b
+                storage.bytes[index + 3] = pixel.a
+            }
+        }
+    }
+
     func pixel(x: Int, y: Int) -> RGBA {
         guard x >= 0, y >= 0, x < width, y < height else { return .clear }
         let index = (y * width + x) * 4
@@ -79,6 +110,77 @@ struct PixelBuffer: Equatable, @unchecked Sendable {
             b: storage.bytes[index + 2],
             a: storage.bytes[index + 3]
         )
+    }
+
+    mutating func blit(_ source: PixelBuffer, atX originX: Int, y originY: Int) {
+        makeUnique()
+        for row in 0..<source.height {
+            let destinationY = originY + row
+            guard destinationY >= 0, destinationY < height else { continue }
+            for column in 0..<source.width {
+                let destinationX = originX + column
+                guard destinationX >= 0, destinationX < width else { continue }
+                let pixel = source.pixel(x: column, y: row)
+                let index = (destinationY * width + destinationX) * 4
+                storage.bytes[index] = pixel.r
+                storage.bytes[index + 1] = pixel.g
+                storage.bytes[index + 2] = pixel.b
+                storage.bytes[index + 3] = pixel.a
+            }
+        }
+    }
+
+    /// Replaces each channel by `amount` of `color`. `amount` is 0...1.
+    mutating func mixPixel(x: Int, y: Int, color: RGBA, amount: CGFloat) {
+        guard x >= 0, y >= 0, x < width, y < height else { return }
+        let coverage = min(max(amount, 0), 1)
+        guard coverage > 0 else { return }
+        makeUnique()
+        let index = (y * width + x) * 4
+        let channels = [color.r, color.g, color.b, color.a]
+        for channel in 0..<4 {
+            let destination = CGFloat(storage.bytes[index + channel])
+            let source = CGFloat(channels[channel])
+            storage.bytes[index + channel] = UInt8(clamping: Int((destination + (source - destination) * coverage).rounded()))
+        }
+    }
+
+    mutating func paint(_ color: RGBA, x: Int, y: Int, coverage: CGFloat) {
+        guard x >= 0, y >= 0, x < width, y < height, coverage > 0 else { return }
+        makeUnique()
+        blendOver(x: x, y: y, source: color, coverage: min(coverage, 1))
+    }
+
+    mutating func erase(canvasCoverage: [UInt8], canvasWidth: Int, originX: Int, originY: Int) {
+        guard canvasWidth > 0, canvasCoverage.count.isMultiple(of: canvasWidth) else { return }
+        let canvasHeight = canvasCoverage.count / canvasWidth
+        makeUnique()
+        for y in 0..<height {
+            let canvasY = originY + y
+            guard canvasY >= 0, canvasY < canvasHeight else { continue }
+            for x in 0..<width {
+                let canvasX = originX + x
+                guard canvasX >= 0, canvasX < canvasWidth else { continue }
+                let coverage = canvasCoverage[canvasY * canvasWidth + canvasX]
+                guard coverage > 0 else { continue }
+                let index = (y * width + x) * 4
+                if coverage >= 255 {
+                    storage.bytes[index] = 0
+                    storage.bytes[index + 1] = 0
+                    storage.bytes[index + 2] = 0
+                    storage.bytes[index + 3] = 0
+                } else {
+                    let keep = CGFloat(255 - coverage) / 255
+                    let alpha = Int((CGFloat(storage.bytes[index + 3]) * keep).rounded())
+                    storage.bytes[index + 3] = UInt8(clamping: alpha)
+                    if alpha == 0 {
+                        storage.bytes[index] = 0
+                        storage.bytes[index + 1] = 0
+                        storage.bytes[index + 2] = 0
+                    }
+                }
+            }
+        }
     }
 
     mutating func setPixel(x: Int, y: Int, rgba: RGBA) {

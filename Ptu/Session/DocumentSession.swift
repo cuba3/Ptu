@@ -36,6 +36,7 @@ protocol DocumentSession: AnyObject {
     func withPaintingModel(_ body: (inout DocumentModel) -> Void)
     func notePaintDirty(_ rect: CGRect)
     func commitPainting()
+    func cancelCoalescedEdit()
 }
 
 @MainActor
@@ -45,6 +46,8 @@ final class EditorDocumentSession: DocumentSession {
     var selectedLayerID: UUID?
     var foreground: RGBA = .black
     var background: RGBA = .white
+    /// When true, the brush paints the selected layer's mask instead of its pixels.
+    var editsMask = false
     private(set) var renderGeneration = 1
 
     @ObservationIgnored var onModelChange: ((DocumentModel) -> Void)?
@@ -185,6 +188,18 @@ final class EditorDocumentSession: DocumentSession {
         } else {
             markDirty(.rect(dirty))
         }
+    }
+
+    func cancelCoalescedEdit() {
+        guard coalesceDepth > 0 else { return }
+        coalesceDepth = 0
+        painting = nil
+        if let snapshot = gestureSnapshot {
+            model = snapshot
+        }
+        gestureSnapshot = nil
+        markDirty(.full)
+        publish()
     }
 
     private func markDirty(_ redraw: Redraw) {

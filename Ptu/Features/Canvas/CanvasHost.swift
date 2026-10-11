@@ -11,6 +11,8 @@ struct CanvasHost: NSViewRepresentable {
     var brushSize: Double
     var renderGeneration: Int
     var zoomRequestID: Int
+    var displayGeneration: Int
+    var overlayRevision: Int
 
     func makeNSView(context: Context) -> CanvasView {
         let view = CanvasView()
@@ -21,6 +23,6 @@ struct CanvasHost: NSViewRepresentable {
     func updateNSView(_ nsView: CanvasView, context: Context) {
         nsView.model = canvas
         nsView.syncFromModel()
-        _ = (tool, selection, cropRect, brushSize, renderGeneration, zoomRequestID)
+        _ = (tool, selection, cropRect, brushSize, renderGeneration, zoomRequestID, displayGeneration, overlayRevision)
     }
 }

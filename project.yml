@@ -47,10 +47,27 @@ targets:
             UTTypeDescription: Ptu Document
             UTTypeConformsTo:
               - com.apple.package
-              - public.composite-content
+              - public.data
             UTTypeTagSpecification:
               public.filename-extension:
                 - ptu
+        UTImportedTypeDeclarations:
+          - UTTypeIdentifier: com.adobe.photoshop-image
+            UTTypeDescription: Adobe Photoshop Document
+            UTTypeConformsTo:
+              - public.image
+              - public.data
+            UTTypeTagSpecification:
+              public.filename-extension:
+                - psd
+          - UTTypeIdentifier: com.adobe.photoshop-large-image
+            UTTypeDescription: Adobe Photoshop Large Document
+            UTTypeConformsTo:
+              - public.image
+              - public.data
+            UTTypeTagSpecification:
+              public.filename-extension:
+                - psb
         CFBundleDocumentTypes:
           - CFBundleTypeName: Ptu Document
             CFBundleTypeRole: Editor
